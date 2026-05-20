@@ -6,6 +6,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 WORKING_DIR=$PWD
 DEFCON_TEMPLATE="$SCRIPT_DIR/DEFCON.md"
 PLAN_TEMPLATE="$SCRIPT_DIR/PLAN.md"
+REPO_README="$SCRIPT_DIR/README.md"
 OUTPUT_DIR="$WORKING_DIR/decompiled"
 MORPHE_API_URL="https://api.morphe.software"
 MORPHE_PATCHES_REPO_RAW="https://raw.githubusercontent.com/MorpheApp/morphe-patches/main"
@@ -192,7 +193,7 @@ require_placeholders() {
 
 prompt_for_tasks() {
     local tasks
-    tasks=$(gum write --placeholder "Describe the challenge tasks. Press Ctrl+D when finished.")
+    tasks=$(gum write --placeholder "Describe the analysis goals, one per line. Press Ctrl+D when finished.")
     [[ -n "${tasks//[[:space:]]/}" ]] || fail "Task description cannot be empty"
     printf '%s' "$tasks"
 }
@@ -221,6 +222,11 @@ render_template() {
             else print
         }
     ' "$template" >"$output"
+}
+
+remove_repo_readme() {
+    [[ -f "$REPO_README" ]] || return 0
+    rm -f -- "$REPO_README"
 }
 
 main() {
@@ -258,6 +264,7 @@ main() {
 
     render_template "$DEFCON_TEMPLATE" "$OUTPUT_DIR/DEFCON.md" "$app_id" "$tasks"
     render_template "$PLAN_TEMPLATE"   "$OUTPUT_DIR/PLAN.md"   "$app_id" "$tasks"
+    remove_repo_readme
 
     gum style --border normal --padding '1 2' --margin '1 0' \
         "Decompiled $artifact_name into $OUTPUT_DIR and wrote DEFCON.md + PLAN.md for $app_id"
