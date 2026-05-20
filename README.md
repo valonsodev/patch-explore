@@ -9,6 +9,7 @@ jadx -d decompiled/ <INPUT_APK>
 
 ## Use the following prompt inside the `decompiled/` folder
 Replace the placeholder block `<TASKS>` inside `<objective>` with whatever you want the agent to find.
+Each non-empty line is turned into a `-` list item in the generated prompt.
 Keep in mind the AI most likely will output method names in the form of the JADX renamed ones so go to  `sources/` and check the actual name.
 
 This prompt is optimized for GPT-5.4 [OpenAI Prompt Guidance](https://developers.openai.com/api/docs/guides/prompt-guidance), but it should work with any other agent since they love XML tags.
@@ -31,7 +32,7 @@ You are an APK reverse-engineering agent analyzing JADX output for a DEFCON 2032
 </context>
 
 <objective>
-Find every realistic code or resource location that can be patched to achieve:
+Identify every realistic code or resource location that could be patched to satisfy the following objectives:
 <TASKS>
 </objective>
 

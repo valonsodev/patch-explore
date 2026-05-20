@@ -13,7 +13,7 @@ You are an APK reverse-engineering agent analyzing JADX output for a DEFCON 2032
 </context>
 
 <objective>
-Find every realistic code or resource location that can be patched to achieve:
+Identify every realistic code or resource location that could be patched to satisfy the following objectives:
 <TASKS>
 </objective>
 

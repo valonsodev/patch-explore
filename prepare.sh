@@ -3,8 +3,10 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-DEFCON_FILE="$SCRIPT_DIR/DEFCON.md"
-PLAN_FILE="$SCRIPT_DIR/PLAN.md"
+WORKING_DIR=$PWD
+DEFCON_TEMPLATE="$SCRIPT_DIR/DEFCON.md"
+PLAN_TEMPLATE="$SCRIPT_DIR/PLAN.md"
+OUTPUT_DIR="$WORKING_DIR/decompiled"
 MORPHE_API_URL="https://api.morphe.software"
 MORPHE_PATCHES_REPO_RAW="https://raw.githubusercontent.com/MorpheApp/morphe-patches/main"
 DEFAULT_VERSION="any"
@@ -40,7 +42,7 @@ pick_artifact() {
     local candidate selection
 
     mapfile -d '' artifacts < <(
-        find "$SCRIPT_DIR" -maxdepth 1 -type f \( \
+        find "$WORKING_DIR" -maxdepth 1 -type f \( \
             -iname '*.apk' -o \
             -iname '*.apks' -o \
             -iname '*.xapk' -o \
@@ -49,7 +51,7 @@ pick_artifact() {
     )
 
     case ${#artifacts[@]} in
-        0) fail "No .apk, .apks, .xapk, or .apkm files found in $SCRIPT_DIR" ;;
+        0) fail "No .apk, .apks, .xapk, or .apkm files found in $WORKING_DIR" ;;
         1) printf '%s\n' "${artifacts[0]}"; return ;;
     esac
 
@@ -59,23 +61,22 @@ pick_artifact() {
 
     selection=$(printf '%s\n' "${labels[@]}" | gum choose --header "Select the Android artifact to inspect")
     [[ -n "$selection" ]] || fail "No artifact selected"
-    printf '%s\n' "$SCRIPT_DIR/$selection"
+    printf '%s\n' "$WORKING_DIR/$selection"
 }
 
 read_package_id() {
-    apkeditor info -package -i "$1" 2>/dev/null \
-        | sed -n 's/^[[:space:]]*//; s/[[:space:]]*$//; /^$/d; p; q'
+    local raw
+    raw=$(apkeditor info -package -i "$1" 2>/dev/null \
+        | sed -n 's/^[[:space:]]*//; s/[[:space:]]*$//; /^$/d; p; q')
+    raw=${raw#package=}
+    raw=${raw#\"}
+    raw=${raw%\"}
+    printf '%s\n' "$raw"
 }
 
-resolve_package_id() {
+merge_to_plain_apk() {
     local input_path=$1
-    local package_id temp_dir merged_apk
-
-    package_id=$(read_package_id "$input_path" || true)
-    if [[ -n "$package_id" ]]; then
-        printf '%s\n' "$package_id"
-        return
-    fi
+    local temp_dir merged_apk
 
     temp_dir=$(mktemp -d)
     CLEANUP_PATHS+=("$temp_dir")
@@ -84,6 +85,20 @@ resolve_package_id() {
     apkeditor m -i "$input_path" -o "$merged_apk" -f >/dev/null 2>&1 \
         || fail "APKEditor failed to merge $(basename -- "$input_path")"
 
+    printf '%s\n' "$merged_apk"
+}
+
+resolve_package_id() {
+    local input_path=$1
+    local package_id merged_apk
+
+    package_id=$(read_package_id "$input_path" || true)
+    if [[ -n "$package_id" ]]; then
+        printf '%s\n' "$package_id"
+        return
+    fi
+
+    merged_apk=$(merge_to_plain_apk "$input_path")
     package_id=$(read_package_id "$merged_apk" || true)
     [[ -n "$package_id" ]] || fail "Unable to resolve a package ID from $(basename -- "$input_path")"
 
@@ -170,9 +185,9 @@ prepare_download_page() {
 }
 
 require_placeholders() {
-    grep -q '<APP_ID>' "$DEFCON_FILE" || fail "DEFCON.md does not contain <APP_ID>"
-    grep -q '<TASKS>' "$DEFCON_FILE" || fail "DEFCON.md does not contain <TASKS>"
-    grep -q '<TASKS>' "$PLAN_FILE" || fail "PLAN.md does not contain <TASKS>"
+    grep -q '<APP_ID>' "$DEFCON_TEMPLATE" || fail "DEFCON.md template does not contain <APP_ID>"
+    grep -q '<TASKS>'  "$DEFCON_TEMPLATE" || fail "DEFCON.md template does not contain <TASKS>"
+    grep -q '<TASKS>'  "$PLAN_TEMPLATE"   || fail "PLAN.md template does not contain <TASKS>"
 }
 
 prompt_for_tasks() {
@@ -182,12 +197,22 @@ prompt_for_tasks() {
     printf '%s' "$tasks"
 }
 
-replace_placeholders_in_file() {
-    local target=$1 app_id=$2 tasks=$3
-    local temp_file
+normalize_tasks() {
+    local tasks=$1
 
-    temp_file=$(mktemp)
-    CLEANUP_PATHS+=("$temp_file")
+    awk '
+        /^[[:space:]]*$/ { next }
+        {
+            line = $0
+            sub(/^[[:space:]]*[-*][[:space:]]+/, "", line)
+            sub(/^[[:space:]]*[0-9]+[.)][[:space:]]+/, "", line)
+            print "- " line
+        }
+    ' <<<"$tasks"
+}
+
+render_template() {
+    local template=$1 output=$2 app_id=$3 tasks=$4
 
     awk -v app_id="$app_id" -v tasks="$tasks" '
         {
@@ -195,9 +220,7 @@ replace_placeholders_in_file() {
             if ($0 == "<TASKS>") print tasks
             else print
         }
-    ' "$target" >"$temp_file"
-
-    mv -- "$temp_file" "$target"
+    ' "$template" >"$output"
 }
 
 main() {
@@ -206,6 +229,7 @@ main() {
 
     require_command gum
     require_command apkeditor
+    require_command jadx
     require_command curl
     require_placeholders
 
@@ -224,15 +248,19 @@ main() {
     fi
 
     tasks=$(prompt_for_tasks)
+    tasks=$(normalize_tasks "$tasks")
 
-    gum format -- "# Template Update\n\n- Artifact: ${artifact_name}\n- Package ID: ${app_id}\n\n## Tasks\n\n${tasks}"
-    gum confirm "Replace placeholders in DEFCON.md and PLAN.md?" || fail "Cancelled"
+    gum format -- "# Workspace Plan\n\n- Artifact: ${artifact_name}\n- Package ID: ${app_id}\n- Decompile to: ${OUTPUT_DIR}\n\n## Tasks\n\n${tasks}"
+    gum confirm "Decompile ${artifact_name} into ${OUTPUT_DIR} and write planning docs?" || fail "Cancelled"
 
-    replace_placeholders_in_file "$DEFCON_FILE" "$app_id" "$tasks"
-    replace_placeholders_in_file "$PLAN_FILE" "$app_id" "$tasks"
+    notice "Decompiling with jadx → $OUTPUT_DIR"
+    jadx -d "$OUTPUT_DIR" "$artifact_path" || true
+
+    render_template "$DEFCON_TEMPLATE" "$OUTPUT_DIR/DEFCON.md" "$app_id" "$tasks"
+    render_template "$PLAN_TEMPLATE"   "$OUTPUT_DIR/PLAN.md"   "$app_id" "$tasks"
 
     gum style --border normal --padding '1 2' --margin '1 0' \
-        "Updated DEFCON.md and PLAN.md for $app_id using $artifact_name"
+        "Decompiled $artifact_name into $OUTPUT_DIR and wrote DEFCON.md + PLAN.md for $app_id"
 }
 
 main "$@"
